@@ -1,0 +1,405 @@
+<?php
+
+/**
+ * @file
+ * OpenRouter provider integration for the OpenAI module.
+ */
+
+/**
+ * Implements hook_config_info().
+ */
+function openai_openrouter_config_info() {
+  return [
+    'openai_openrouter.settings' => [
+      'label' => t('OpenRouter Settings'),
+      'group' => t('Configuration'),
+    ],
+  ];
+}
+
+/**
+ * Implements hook_autoload_info().
+ */
+function openai_openrouter_autoload_info() {
+  return [
+    'OpenRouterAdapter' => 'includes/OpenRouterAdapter.php',
+  ];
+}
+
+/**
+ * Implements hook_openai_provider_info().
+ */
+function openai_openrouter_openai_provider_info() {
+  return [
+    'openrouter' => [
+      'label' => t('OpenRouter'),
+      'description' => t('Access 300+ AI models via OpenRouter.'),
+      'key_label' => t('OpenRouter API Key'),
+      'class' => 'OpenRouterAdapter',
+      'website' => 'https://openrouter.ai/',
+      'key_url' => 'https://openrouter.ai/settings/keys',
+      'models_url' => 'https://openrouter.ai/models',
+    ],
+  ];
+}
+
+/**
+ * Implements hook_openai_provider_settings_alter().
+ */
+function openai_openrouter_openai_provider_settings_alter(&$settings, $context) {
+  if ($context['provider'] !== 'openrouter') {
+    return;
+  }
+
+  $available_keys = function_exists('key_get_key_names_as_options') ? key_get_key_names_as_options() : [];
+
+  $settings['api_key_openrouter'] = [
+    '#type' => 'key_select',
+    '#title' => t('OpenRouter API Key'),
+    '#default_value' => config_get('openai.settings', 'api_key_openrouter') ?: '',
+    '#options' => $available_keys,
+    '#key_filters' => ['type' => 'authentication'],
+    '#description' => t('Get your API key from <a href="@url" target="_blank">@url</a>.', ['@url' => 'https://openrouter.ai/settings/keys']),
+    // Ensure we strip the Key module's generic helper at build time so
+    // only the provider guidance/link is shown.
+    '#after_build' => ['openai_openrouter_strip_key_helper'],
+    '#weight' => -5,
+  ];
+
+  // Add link to models configuration page
+  $settings['models_link'] = [
+    '#type' => 'markup',
+    '#markup' => '<p>' . t('<strong><a href="@url">Configure which OpenRouter models to enable &raquo;</a></strong>', [
+      '@url' => url('admin/config/openai/openrouter'),
+    ]) . '</p>',
+    '#weight' => -4,
+  ];
+
+  if (isset($context['form'])) {
+    $context['form']['#submit'][] = 'openai_openrouter_provider_settings_submit';
+  }
+}
+
+/**
+ * Submit handler for OpenRouter provider settings.
+ */
+function openai_openrouter_provider_settings_submit($form, &$form_state) {
+  // Placeholder for any provider-specific config that needs custom handling.
+  // The main OpenAI settings handler already saves api_key_openrouter.
+}
+
+/**
+ * After-build callback to remove the Key module's generic helper sentence
+ * from the key_select description for OpenRouter.
+ */
+function openai_openrouter_strip_key_helper($element, &$form_state) {
+  if (!empty($element['#description']) && is_string($element['#description'])) {
+    $pattern = '#Choose an available key\.\s*If the desired key is not listed, create a new key\.#is';
+    $new = preg_replace($pattern, '', $element['#description']);
+    $new = preg_replace('/^\s*[-:\s]*/', '', $new);
+    $element['#description'] = trim($new);
+  }
+  return $element;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for openai_settings_form.
+ */
+function openai_openrouter_form_openai_settings_form_alter(&$form, &$form_state, $form_id) {
+  // Check if OpenRouter is enabled and has no models
+  $providers = config_get('openai.settings', 'providers') ?: [];
+  if (!empty($providers['openrouter']['enabled'])) {
+    // Check if the openrouter models element exists and shows the error
+    if (isset($form['providers']['openrouter_models']['#markup'])) {
+      $markup = $form['providers']['openrouter_models']['#markup'];
+      if (strpos($markup, 'No models were returned') !== FALSE) {
+        // Replace with a more helpful message
+        $form['providers']['openrouter_models']['#markup'] = '<div class="messages warning">' . 
+          t('No OpenRouter models are enabled. <a href="@url">Visit the OpenRouter models configuration page</a> to select which models to enable.', [
+            '@url' => url('admin/config/openai/openrouter'),
+          ]) . '</div>';
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function openai_openrouter_menu() {
+  $items = [];
+
+  $items['admin/config/openai/openrouter'] = [
+    'title' => 'OpenRouter Models',
+    'description' => 'Configure which OpenRouter models are available for selection.',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => ['openai_openrouter_models_form'],
+    'access arguments' => ['administer site configuration'],
+    'type' => MENU_NORMAL_ITEM,
+    'weight' => 10,
+  ];
+
+  return $items;
+}
+
+/**
+ * Form builder for OpenRouter model selection.
+ */
+function openai_openrouter_models_form($form, &$form_state) {
+  $form = [];
+
+  $form['description'] = [
+    '#type' => 'markup',
+    '#markup' => '<p>' . t('OpenRouter provides access to 300+ models from various providers. By default, all available models will be listed in model selection dropdowns throughout the site. Use the toggles below to enable only the models you need. This helps keep your model selection dropdowns clean and focused.') . '</p>',
+  ];
+
+  // Get the models from OpenRouter API
+  $models = openai_openrouter_fetch_models();
+
+  if (empty($models)) {
+    $form['no_models'] = [
+      '#type' => 'markup',
+      '#markup' => '<p>' . t('No models available. Please check your API key configuration on the <a href="@settings">OpenAI settings page</a>.', [
+        '@settings' => url('admin/config/openai/settings'),
+      ]) . '</p>',
+    ];
+    return $form;
+  }
+
+  // Get currently enabled models
+  $config = config('openai_openrouter.settings');
+  $enabled_models = $config->get('enabled_models') ?: [];
+
+  // Organize models by provider
+  $providers = [];
+  foreach ($models as $model_id => $model) {
+    $provider = $model['provider'] ?? 'Unknown';
+    $providers[$provider][$model_id] = $model;
+  }
+
+  // Sort providers alphabetically
+  ksort($providers);
+
+  $form['models'] = [
+    '#tree' => TRUE,
+  ];
+
+  // Create fieldsets for each provider
+  foreach ($providers as $provider_name => $provider_models) {
+    // Check if any models in this provider are enabled
+    $has_enabled_models = FALSE;
+    foreach ($provider_models as $model_id => $model) {
+      if (in_array($model_id, $enabled_models)) {
+        $has_enabled_models = TRUE;
+        break;
+      }
+    }
+
+    $model_count = count($provider_models);
+    $provider_id = preg_replace('/[^a-z0-9_]+/', '_', strtolower($provider_name));
+
+    $form[$provider_id . '_fieldset'] = [
+      '#type' => 'fieldset',
+      '#title' => t('@provider (@count models)', [
+        '@provider' => $provider_name,
+        '@count' => $model_count,
+      ]),
+      '#collapsible' => TRUE,
+      '#collapsed' => !$has_enabled_models,
+    ];
+
+    // Add "Select All" / "Deselect All" convenience links
+    $form[$provider_id . '_fieldset']['select_controls'] = [
+      '#type' => 'markup',
+      '#markup' => '<div class="form-item"><a href="#" class="select-all-provider" data-provider="' . $provider_id . '">' . t('Select all') . '</a> | <a href="#" class="deselect-all-provider" data-provider="' . $provider_id . '">' . t('Deselect all') . '</a></div>',
+      '#weight' => -10,
+    ];
+
+    // Sort models within provider
+    uasort($provider_models, function($a, $b) {
+      return strcmp($a['name'] ?? '', $b['name'] ?? '');
+    });
+
+    foreach ($provider_models as $model_id => $model) {
+      $model_name = $model['name'] ?? $model_id;
+      $model_description = $model['description'] ?? '';
+
+      // Add context info if available
+      $context_info = [];
+      if (!empty($model['context_length'])) {
+        $context_info[] = t('Context: @context tokens', ['@context' => number_format($model['context_length'])]);
+      }
+
+      // Add pricing info if available
+      if (isset($model['pricing']) && is_array($model['pricing'])) {
+        if (isset($model['pricing']['prompt']) && is_numeric($model['pricing']['prompt'])) {
+          $price_per_million = $model['pricing']['prompt'] * 1000000;
+          $context_info[] = t('Input: $@price/1M tokens', ['@price' => number_format($price_per_million, 2)]);
+        }
+        if (isset($model['pricing']['completion']) && is_numeric($model['pricing']['completion'])) {
+          $price_per_million = $model['pricing']['completion'] * 1000000;
+          $context_info[] = t('Output: $@price/1M tokens', ['@price' => number_format($price_per_million, 2)]);
+        }
+      }
+
+      $description = $model_description;
+      if (!empty($context_info)) {
+        $description .= '<br><strong>' . implode(' | ', $context_info) . '</strong>';
+      }
+
+      $form[$provider_id . '_fieldset'][$model_id] = [
+        '#type' => 'checkbox',
+        '#title' => $model_name,
+        '#description' => $description,
+        '#default_value' => in_array($model_id, $enabled_models),
+        '#parents' => ['models', $model_id],
+      ];
+    }
+  }
+
+  $form['actions'] = [
+    '#type' => 'actions',
+  ];
+  
+  $form['actions']['submit'] = [
+    '#type' => 'submit',
+    '#value' => t('Save configuration'),
+  ];
+
+  // Attach JavaScript for select all functionality
+  $form['#attached']['js'][] = backdrop_get_path('module', 'openai_openrouter') . '/js/openai_openrouter_models.js';
+
+  return $form;
+}
+
+/**
+ * Submit handler for OpenRouter models form.
+ */
+function openai_openrouter_models_form_submit($form, &$form_state) {
+  $config = config('openai_openrouter.settings');
+
+  // Extract enabled models
+  $enabled_models = [];
+  if (!empty($form_state['values']['models'])) {
+    foreach ($form_state['values']['models'] as $model_id => $enabled) {
+      if ($enabled) {
+        $enabled_models[] = $model_id;
+      }
+    }
+  }
+
+  $config->set('enabled_models', $enabled_models);
+  $config->save();
+
+  backdrop_set_message(t('Enabled @count models.', ['@count' => count($enabled_models)]));
+}
+
+/**
+ * Fetch models from OpenRouter API.
+ *
+ * @return array
+ *   Array of models with metadata.
+ */
+function openai_openrouter_fetch_models() {
+  // Get API key from config
+  $api_key = config_get('openai.settings', 'providers.openrouter.api_key');
+  if (empty($api_key)) {
+    watchdog('openai_openrouter', 'No API key configured', [], WATCHDOG_WARNING);
+    return [];
+  }
+
+  // Get the actual key value from the Key module
+  if (function_exists('key_get_key_value')) {
+    $api_key = key_get_key_value($api_key);
+  }
+
+  if (empty($api_key)) {
+    watchdog('openai_openrouter', 'API key value is empty', [], WATCHDOG_WARNING);
+    return [];
+  }
+
+  // Check cache first
+  $cache_key = 'openrouter_models_list';
+  $cached = cache_get($cache_key);
+  if ($cached && !empty($cached->data)) {
+    return $cached->data;
+  }
+
+  // Use Backdrop's HTTP request instead of curl
+  $url = 'https://openrouter.ai/api/v1/models';
+  $options = [
+    'headers' => [
+      'Authorization' => 'Bearer ' . $api_key,
+      'HTTP-Referer' => url('<front>', ['absolute' => TRUE]),
+      'X-Title' => config_get('system.core', 'site_name') ?: 'Backdrop CMS',
+    ],
+    'method' => 'GET',
+  ];
+
+  $response = backdrop_http_request($url, $options);
+
+  if ($response->code == 200 && !empty($response->data)) {
+    $data = json_decode($response->data, TRUE);
+    $models_data = $data['data'] ?? [];
+
+    if (empty($models_data)) {
+      watchdog('openai_openrouter', 'API returned no models', [], WATCHDOG_WARNING);
+      return [];
+    }
+
+    // Format models
+    $formatted_models = [];
+    foreach ($models_data as $model) {
+      $model_id = $model['id'] ?? '';
+      if (empty($model_id)) {
+        continue;
+      }
+
+      // Extract pricing information
+      $pricing = [];
+      if (!empty($model['pricing'])) {
+        if (isset($model['pricing']['prompt'])) {
+          $pricing['prompt'] = (float) $model['pricing']['prompt'];
+        }
+        if (isset($model['pricing']['completion'])) {
+          $pricing['completion'] = (float) $model['pricing']['completion'];
+        }
+      }
+
+      $formatted_models[$model_id] = [
+        'name' => $model['name'] ?? $model_id,
+        'provider' => openai_openrouter_extract_provider($model_id),
+        'description' => $model['description'] ?? '',
+        'context_length' => $model['context_length'] ?? NULL,
+        'pricing' => $pricing,
+      ];
+    }
+
+    // Cache for 1 hour
+    cache_set($cache_key, $formatted_models, 'cache', time() + 3600);
+    return $formatted_models;
+  }
+  else {
+    $error_msg = !empty($response->error) ? $response->error : 'HTTP ' . $response->code;
+    watchdog('openai_openrouter', 'Failed to fetch models: @error', ['@error' => $error_msg], WATCHDOG_ERROR);
+  }
+
+  return [];
+}
+
+/**
+ * Extract provider name from model ID.
+ *
+ * @param string $model_id
+ *   The model ID (e.g., 'openai/gpt-4').
+ *
+ * @return string
+ *   The provider name.
+ */
+function openai_openrouter_extract_provider($model_id) {
+  if (strpos($model_id, '/') !== FALSE) {
+    list($provider) = explode('/', $model_id, 2);
+    return ucfirst($provider);
+  }
+  return 'Unknown';
+}
