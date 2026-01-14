@@ -4,3 +4,5 @@ backdrop = 1.x
 type = module
 package = OpenAI
 dependencies[] = openai
+dependencies[] = key
+
