@@ -1,8 +1,9 @@
-name = OpenAI OpenRouter
+name = OpenAI OpenRouter Provider
 description = Provides OpenRouter as a pluggable provider for the OpenAI integration module.
 backdrop = 1.x
 type = module
 package = OpenAI
 dependencies[] = openai
 dependencies[] = key
+
 
