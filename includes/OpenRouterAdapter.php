@@ -157,6 +157,28 @@ class OpenRouterAdapter {
     }
   }
 
+  /**
+   * Get models for a given capability.
+   *
+   * OpenRouter's own capability metadata has been found to be unreliable:
+   * some models misreport or omit their supported modalities (text, image,
+   * embeddings, etc.). To avoid breaking behaviour based on that metadata,
+   * this adapter intentionally ignores the requested capability and returns
+   * the full model list from getModels().
+   *
+   * Site administrators who need more precise capability information can
+   * override or adjust model capabilities via
+   * hook_openai_model_capabilities_alter(), which is applied to the data
+   * returned by this adapter.
+   *
+   * @param string $capability
+   *   The capability to nominally filter by (e.g., 'text', 'image',
+   *   'embeddings'). Currently used only as a hint; no filtering is applied
+   *   due to the limitations described above.
+   *
+   * @return array
+   *   The list of models, unfiltered by capability.
+   */
   public function getModelsByCapability($capability): array {
     return $this->getModels();
   }
