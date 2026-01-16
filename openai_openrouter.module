@@ -53,10 +53,14 @@ function openai_openrouter_openai_provider_settings_alter(&$settings, $context) 
 
   $available_keys = function_exists('key_get_key_names_as_options') ? key_get_key_names_as_options() : [];
 
+  // Use central providers mapping so the default reflects saved provider config.
+  $providers_root = config_get('openai.settings', 'providers') ?: [];
+  $default_key = !empty($providers_root['openrouter']['api_key']) ? $providers_root['openrouter']['api_key'] : '';
+
   $settings['api_key_openrouter'] = [
     '#type' => 'key_select',
     '#title' => t('OpenRouter API Key'),
-    '#default_value' => config_get('openai.settings', 'api_key_openrouter') ?: '',
+    '#default_value' => $default_key,
     '#options' => $available_keys,
     '#key_filters' => ['type' => 'authentication'],
     '#description' => t('Get your API key from <a href="@url" target="_blank">@url</a>.', ['@url' => 'https://openrouter.ai/settings/keys']),
@@ -114,7 +118,7 @@ function openai_openrouter_form_openai_settings_form_alter(&$form, &$form_state,
       $markup = $form['providers']['openrouter_models']['#markup'];
       if (strpos($markup, 'No models were returned') !== FALSE) {
         // Replace with a more helpful message
-        $form['providers']['openrouter_models']['#markup'] = '<div class="messages warning">' . 
+        $form['providers']['openrouter_models']['#markup'] = '<div class="messages warning">' .
           t('No OpenRouter models are enabled. <a href="@url">Visit the OpenRouter models configuration page</a> to select which models to enable.', [
             '@url' => url('admin/config/openai/openrouter'),
           ]) . '</div>';
@@ -260,7 +264,7 @@ function openai_openrouter_models_form($form, &$form_state) {
   $form['actions'] = [
     '#type' => 'actions',
   ];
-  
+
   $form['actions']['submit'] = [
     '#type' => 'submit',
     '#value' => t('Save configuration'),
