@@ -158,21 +158,28 @@ class OpenRouterAdapter {
   }
 
   /**
-   * Get models by capability.
+   * Get models for a given capability.
    *
-   * NOTE: OpenRouter provides architecture.input_modalities and
-   * architecture.output_modalities but this is not always reliable.
-   * Site admins can override via hook_openai_model_capabilities_alter().
+   * OpenRouter's own capability metadata has been found to be unreliable:
+   * some models misreport or omit their supported modalities (text, image,
+   * embeddings, etc.). To avoid breaking behaviour based on that metadata,
+   * this adapter intentionally ignores the requested capability and returns
+   * the full model list from getModels().
+   *
+   * Site administrators who need more precise capability information can
+   * override or adjust model capabilities via
+   * hook_openai_model_capabilities_alter(), which is applied to the data
+   * returned by this adapter.
    *
    * @param string $capability
-   *   The capability to filter by.
+   *   The capability to nominally filter by (e.g., 'text', 'image',
+   *   'embeddings'). Currently used only as a hint; no filtering is applied
+   *   due to the limitations described above.
    *
    * @return array
-   *   Array of model IDs that support the capability.
+   *   The list of models, unfiltered by capability.
    */
   public function getModelsByCapability($capability): array {
-    // OpenRouter doesn't reliably report model capabilities
-    // So we just return all models sorted properly
     return $this->getModels();
   }
 
@@ -189,7 +196,6 @@ class OpenRouterAdapter {
 
   /**
    * Get chat/text models.
-   * Uses best-effort capability detection via getModelsByCapability().
    */
   public function getChatModels(): array {
     return $this->getModelsByCapability('text');
@@ -197,7 +203,6 @@ class OpenRouterAdapter {
 
   /**
    * Get image generation models.
-   * Uses best-effort capability detection via getModelsByCapability().
    */
   public function getImageModels(): array {
     return $this->getModelsByCapability('image');
@@ -205,7 +210,6 @@ class OpenRouterAdapter {
 
   /**
    * Get vision models (image input).
-   * Uses best-effort capability detection via getModelsByCapability().
    */
   public function getVisionModels(): array {
     return $this->getModelsByCapability('vision');
@@ -567,7 +571,7 @@ class OpenRouterAdapter {
     }
   }
 
-  public function embedding(string $input, string $model): array {
+  public function embedding(string $input, string $model, bool $log = TRUE): array {
     try {
       $response = $this->client->embeddings()->create([
         'model' => $model,
