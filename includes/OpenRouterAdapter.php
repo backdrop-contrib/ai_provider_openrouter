@@ -257,6 +257,16 @@ class OpenRouterAdapter {
 
   public function chat(string $model, array $messages, $temperature, $max_tokens = 1024, bool $stream_response = FALSE) {
     try {
+      // Allow other modules to alter chat messages before sending (e.g., inject site context).
+      if (function_exists('backdrop_alter')) {
+        $context = [
+          'operation' => 'chat',
+          'model' => $model,
+          'provider' => 'openrouter',
+        ];
+        backdrop_alter('openai_chat_messages', $messages, $context);
+      }
+
       $payload = [
         'model' => $model,
         'messages' => $messages,
