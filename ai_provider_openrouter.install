@@ -1,0 +1,42 @@
+<?php
+
+/**
+ * Implements hook_install().
+ */
+function ai_provider_openrouter_install() {
+  if (!module_load_install('ai_upgrade')) { return []; }
+  ai_upgrade_module_install('ai_provider_openrouter');
+}
+
+/**
+ * Migrate legacy provider config from openai_openrouter to ai_provider_openrouter.
+ */
+function ai_provider_openrouter_update_1000() {
+  $old_config_name = 'openai_openrouter.settings';
+  $new_config_name = 'ai_provider_openrouter.settings';
+
+  $old = config($old_config_name);
+  $data = $old->get();
+
+  if (!empty($data)) {
+    $new = config($new_config_name);
+    $data['_config_name'] = $new_config_name;
+    $new->setData($data);
+    $new->save();
+    $old->delete();
+  }
+
+  if (module_exists('openai_openrouter')) {
+    module_disable(['openai_openrouter']);
+  }
+
+  return t('Migrated legacy openrouter configuration to AI provider openrouter.');
+}
+
+/**
+ * Implements hook_requirements().
+ */
+function ai_provider_openrouter_requirements($phase) {
+  if (!module_load_install('ai_upgrade')) { return []; }
+  return ai_upgrade_module_requirements($phase, 'ai_provider_openrouter');
+}

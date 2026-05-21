@@ -1,0 +1,7 @@
+name = AI Provider OpenRouter
+description = OpenRouter provider for accessing hundreds of AI models through the AI module.
+backdrop = 1.x
+type = module
+package = AI
+dependencies[] = ai
+dependencies[] = key
