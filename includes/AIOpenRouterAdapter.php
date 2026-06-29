@@ -171,7 +171,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
 
       if ($stream_response) {
         $payload['stream'] = TRUE;
-        return $this->buildStreamingResponse(self::BASE_URL . '/chat/completions', [
+        $stream_options = [
           'method'  => 'POST',
           'headers' => array_merge(
             ['Accept' => 'text/event-stream', 'Content-Type' => 'application/json'],
@@ -179,9 +179,36 @@ class AIOpenRouterAdapter extends AIAdapterBase {
           ),
           'data'    => json_encode($payload),
           'timeout' => 300,
-        ], function ($data) {
+        ];
+        $extractor = function ($data) {
           return $data['choices'][0]['delta']['content'] ?? '';
-        });
+        };
+
+        // Pre-compute the "Developer instruction is not enabled" fallback so the
+        // streaming response object can retry without calling back into chat().
+        $messages_no_system = [];
+        foreach ($messages as $message) {
+          if (isset($message['role']) && $message['role'] === 'system') {
+            $messages_no_system[] = [
+              'role'    => 'user',
+              'content' => '[Instructions]: ' . $message['content'],
+            ];
+          }
+          else {
+            $messages_no_system[] = $message;
+          }
+        }
+        $fallback_payload = $payload;
+        $fallback_payload['messages'] = $messages_no_system;
+        $fallback_options = $stream_options;
+        $fallback_options['data'] = json_encode($fallback_payload);
+
+        return new AIOpenRouterStreamingResponse(
+          self::BASE_URL . '/chat/completions',
+          $stream_options,
+          $extractor,
+          $fallback_options
+        );
       }
 
       // Use backdrop_http_request directly here so the 400 retry path can

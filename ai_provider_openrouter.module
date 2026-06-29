@@ -22,7 +22,8 @@ function ai_provider_openrouter_config_info() {
  */
 function ai_provider_openrouter_autoload_info() {
   return [
-    'AIOpenRouterAdapter' => 'includes/AIOpenRouterAdapter.php',
+    'AIOpenRouterAdapter'          => 'includes/AIOpenRouterAdapter.php',
+    'AIOpenRouterStreamingResponse' => 'includes/AIOpenRouterStreamingResponse.php',
   ];
 }
 
