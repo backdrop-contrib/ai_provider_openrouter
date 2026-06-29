@@ -127,7 +127,22 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'max_tokens'  => max(1, min((int) $max_tokens ?: 1024, 8192)),
       ];
 
-      $result = $this->makeRequest(self::BASE_URL . '/completions', $payload, [], 'POST', 60);
+      if ($stream_response) {
+        $payload['stream'] = TRUE;
+        return $this->buildStreamingResponse(self::BASE_URL . '/completions', [
+          'method'  => 'POST',
+          'headers' => array_merge(
+            ['Accept' => 'text/event-stream', 'Content-Type' => 'application/json'],
+            $this->getDefaultHeaders()
+          ),
+          'data'    => json_encode($payload),
+          'timeout' => 300,
+        ], function ($data) {
+          return $data['choices'][0]['delta']['content'] ?? $data['choices'][0]['text'] ?? '';
+        });
+      }
+
+      $result = $this->makeRequest(self::BASE_URL . '/completions', $payload, [], 'POST', 300);
       return trim($result['choices'][0]['text'] ?? '');
     }
     catch (\Exception $e) {
@@ -154,6 +169,21 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'max_tokens'  => max(1, min((int) $max_tokens ?: 1024, 8192)),
       ];
 
+      if ($stream_response) {
+        $payload['stream'] = TRUE;
+        return $this->buildStreamingResponse(self::BASE_URL . '/chat/completions', [
+          'method'  => 'POST',
+          'headers' => array_merge(
+            ['Accept' => 'text/event-stream', 'Content-Type' => 'application/json'],
+            $this->getDefaultHeaders()
+          ),
+          'data'    => json_encode($payload),
+          'timeout' => 300,
+        ], function ($data) {
+          return $data['choices'][0]['delta']['content'] ?? '';
+        });
+      }
+
       // Use backdrop_http_request directly here so the 400 retry path can
       // inspect the response body before deciding whether to retry.
       $options = [
@@ -163,7 +193,8 @@ class AIOpenRouterAdapter extends AIAdapterBase {
           $this->getDefaultHeaders()
         ),
         'data'    => json_encode($payload),
-        'timeout' => 60,
+        // Long generations can exceed 60s; match the streaming path's 300s.
+        'timeout' => 300,
       ];
 
       $response  = backdrop_http_request(self::BASE_URL . '/chat/completions', $options);
@@ -208,7 +239,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         }
       }
 
-      throw new \Exception('HTTP ' . $http_code . ': ' . substr((string) ($response->data ?? ''), 0, 500));
+      throw new \Exception('HTTP ' . $http_code . ': ' . $this->formatErrorBody($response));
     }
     catch (\Exception $e) {
       watchdog('ai_provider_openrouter', 'OpenRouter chat error: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
@@ -395,6 +426,12 @@ class AIOpenRouterAdapter extends AIAdapterBase {
     if (!in_array($task, ['transcribe', 'translate'], TRUE)) {
       throw new \InvalidArgumentException('Task must be transcribe or translate.');
     }
+    // OpenRouter only exposes /audio/transcriptions; there is no
+    // /audio/translations endpoint.
+    if ($task === 'translate') {
+      watchdog('ai_provider_openrouter', 'Audio translation is not supported by OpenRouter.', [], WATCHDOG_WARNING);
+      throw new \RuntimeException('Audio translation is not supported by OpenRouter.');
+    }
     try {
       $fields = [
         'model'           => $model,
@@ -402,7 +439,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'response_format' => $response_format,
         'file'            => ['path' => $file],
       ];
-      $result = $this->makeMultipartRequest(self::BASE_URL . '/audio/' . $task, $fields, 120);
+      $result = $this->makeMultipartRequest(self::BASE_URL . '/audio/transcriptions', $fields, 120);
       return $result['text'] ?? '';
     }
     catch (\Exception $e) {
@@ -412,16 +449,9 @@ class AIOpenRouterAdapter extends AIAdapterBase {
   }
 
   public function moderation(string $input, string $model = 'omni-moderation-latest'): array {
-    try {
-      return $this->makeRequest(self::BASE_URL . '/moderations', [
-        'model' => $model,
-        'input' => trim($input),
-      ]);
-    }
-    catch (\Exception $e) {
-      watchdog('ai_provider_openrouter', 'OpenRouter moderation error: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
-      throw $e;
-    }
+    // OpenRouter has no /moderations endpoint.
+    watchdog('ai_provider_openrouter', 'Moderation is not supported by OpenRouter.', [], WATCHDOG_WARNING);
+    throw new \RuntimeException('Moderation is not supported by OpenRouter.');
   }
 
   public function embedding(string $input, string $model, bool $log = TRUE): array {
@@ -462,7 +492,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'max_tokens'  => max(1, (int) $max_tokens ?: 1024),
       ];
 
-      $data = $this->makeRequest(self::BASE_URL . '/chat/completions', $payload, [], 'POST', 60);
+      $data = $this->makeRequest(self::BASE_URL . '/chat/completions', $payload, [], 'POST', 300);
       return $this->normalizeToolResponse($data);
     }
     catch (\Exception $e) {
