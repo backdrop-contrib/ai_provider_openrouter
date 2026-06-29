@@ -127,7 +127,22 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'max_tokens'  => max(1, min((int) $max_tokens ?: 1024, 8192)),
       ];
 
-      $result = $this->makeRequest(self::BASE_URL . '/completions', $payload, [], 'POST', 60);
+      if ($stream_response) {
+        $payload['stream'] = TRUE;
+        return $this->buildStreamingResponse(self::BASE_URL . '/completions', [
+          'method'  => 'POST',
+          'headers' => array_merge(
+            ['Accept' => 'text/event-stream', 'Content-Type' => 'application/json'],
+            $this->getDefaultHeaders()
+          ),
+          'data'    => json_encode($payload),
+          'timeout' => 300,
+        ], function ($data) {
+          return $data['choices'][0]['delta']['content'] ?? $data['choices'][0]['text'] ?? '';
+        });
+      }
+
+      $result = $this->makeRequest(self::BASE_URL . '/completions', $payload, [], 'POST', 300);
       return trim($result['choices'][0]['text'] ?? '');
     }
     catch (\Exception $e) {
@@ -154,6 +169,48 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'max_tokens'  => max(1, min((int) $max_tokens ?: 1024, 8192)),
       ];
 
+      if ($stream_response) {
+        $payload['stream'] = TRUE;
+        $stream_options = [
+          'method'  => 'POST',
+          'headers' => array_merge(
+            ['Accept' => 'text/event-stream', 'Content-Type' => 'application/json'],
+            $this->getDefaultHeaders()
+          ),
+          'data'    => json_encode($payload),
+          'timeout' => 300,
+        ];
+        $extractor = function ($data) {
+          return $data['choices'][0]['delta']['content'] ?? '';
+        };
+
+        // Pre-compute the "Developer instruction is not enabled" fallback so the
+        // streaming response object can retry without calling back into chat().
+        $messages_no_system = [];
+        foreach ($messages as $message) {
+          if (isset($message['role']) && in_array($message['role'], ['system', 'developer'], TRUE)) {
+            $messages_no_system[] = [
+              'role'    => 'user',
+              'content' => '[Instructions]: ' . $this->stringifyMessageContent($message['content']),
+            ];
+          }
+          else {
+            $messages_no_system[] = $message;
+          }
+        }
+        $fallback_payload = $payload;
+        $fallback_payload['messages'] = $messages_no_system;
+        $fallback_options = $stream_options;
+        $fallback_options['data'] = json_encode($fallback_payload);
+
+        return new AIOpenRouterStreamingResponse(
+          self::BASE_URL . '/chat/completions',
+          $stream_options,
+          $extractor,
+          $fallback_options
+        );
+      }
+
       // Use backdrop_http_request directly here so the 400 retry path can
       // inspect the response body before deciding whether to retry.
       $options = [
@@ -163,7 +220,8 @@ class AIOpenRouterAdapter extends AIAdapterBase {
           $this->getDefaultHeaders()
         ),
         'data'    => json_encode($payload),
-        'timeout' => 60,
+        // Long generations can exceed 60s; match the streaming path's 300s.
+        'timeout' => 300,
       ];
 
       $response  = backdrop_http_request(self::BASE_URL . '/chat/completions', $options);
@@ -184,10 +242,10 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         if (stripos($top_msg, $needle) !== FALSE || stripos($raw_msg, $needle) !== FALSE) {
           $messages_no_system = [];
           foreach ($messages as $message) {
-            if (isset($message['role']) && $message['role'] === 'system') {
+            if (isset($message['role']) && in_array($message['role'], ['system', 'developer'], TRUE)) {
               $messages_no_system[] = [
                 'role'    => 'user',
-                'content' => '[Instructions]: ' . $message['content'],
+                'content' => '[Instructions]: ' . $this->stringifyMessageContent($message['content']),
               ];
             }
             else {
@@ -205,10 +263,11 @@ class AIOpenRouterAdapter extends AIAdapterBase {
             $result = json_decode($response2->data, TRUE);
             return trim($result['choices'][0]['message']['content'] ?? '');
           }
+          throw new \Exception('HTTP ' . $http_code2 . ': ' . $this->formatErrorBody($response2));
         }
       }
 
-      throw new \Exception('HTTP ' . $http_code . ': ' . substr((string) ($response->data ?? ''), 0, 500));
+      throw new \Exception('HTTP ' . $http_code . ': ' . $this->formatErrorBody($response));
     }
     catch (\Exception $e) {
       watchdog('ai_provider_openrouter', 'OpenRouter chat error: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
@@ -395,6 +454,12 @@ class AIOpenRouterAdapter extends AIAdapterBase {
     if (!in_array($task, ['transcribe', 'translate'], TRUE)) {
       throw new \InvalidArgumentException('Task must be transcribe or translate.');
     }
+    // OpenRouter only exposes /audio/transcriptions; there is no
+    // /audio/translations endpoint.
+    if ($task === 'translate') {
+      watchdog('ai_provider_openrouter', 'Audio translation is not supported by OpenRouter.', [], WATCHDOG_WARNING);
+      throw new \RuntimeException('Audio translation is not supported by OpenRouter.');
+    }
     try {
       $fields = [
         'model'           => $model,
@@ -402,7 +467,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'response_format' => $response_format,
         'file'            => ['path' => $file],
       ];
-      $result = $this->makeMultipartRequest(self::BASE_URL . '/audio/' . $task, $fields, 120);
+      $result = $this->makeMultipartRequest(self::BASE_URL . '/audio/transcriptions', $fields, 120);
       return $result['text'] ?? '';
     }
     catch (\Exception $e) {
@@ -412,16 +477,9 @@ class AIOpenRouterAdapter extends AIAdapterBase {
   }
 
   public function moderation(string $input, string $model = 'omni-moderation-latest'): array {
-    try {
-      return $this->makeRequest(self::BASE_URL . '/moderations', [
-        'model' => $model,
-        'input' => trim($input),
-      ]);
-    }
-    catch (\Exception $e) {
-      watchdog('ai_provider_openrouter', 'OpenRouter moderation error: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
-      throw $e;
-    }
+    // OpenRouter has no /moderations endpoint.
+    watchdog('ai_provider_openrouter', 'Moderation is not supported by OpenRouter.', [], WATCHDOG_WARNING);
+    throw new \RuntimeException('Moderation is not supported by OpenRouter.');
   }
 
   public function embedding(string $input, string $model, bool $log = TRUE): array {
@@ -462,13 +520,45 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         'max_tokens'  => max(1, (int) $max_tokens ?: 1024),
       ];
 
-      $data = $this->makeRequest(self::BASE_URL . '/chat/completions', $payload, [], 'POST', 60);
+      $data = $this->makeRequest(self::BASE_URL . '/chat/completions', $payload, [], 'POST', 300);
       return $this->normalizeToolResponse($data);
     }
     catch (\Exception $e) {
       watchdog('ai_provider_openrouter', 'chatWithTools error: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
       throw $e;
     }
+  }
+
+  /**
+   * Flatten structured or plain message content to a string.
+   *
+   * Structured content is an array of parts (e.g. [['type'=>'text','text'=>'…']]).
+   * Concatenating such an array directly produces "Array", so extract the text
+   * parts instead.
+   */
+  private function stringifyMessageContent($content): string {
+    if (is_string($content)) {
+      return $content;
+    }
+    if (!is_array($content)) {
+      return (string) $content;
+    }
+    // Single associative part: ['type' => 'text', 'text' => '...'].
+    // Iterating over this would yield scalar values, not sub-parts.
+    if (isset($content['type']) && $content['type'] === 'text' && isset($content['text'])) {
+      return (string) $content['text'];
+    }
+    // Array of parts or plain strings.
+    $parts = [];
+    foreach ($content as $part) {
+      if (is_string($part)) {
+        $parts[] = $part;
+      }
+      elseif (is_array($part) && isset($part['type']) && $part['type'] === 'text' && isset($part['text'])) {
+        $parts[] = $part['text'];
+      }
+    }
+    return implode("\n", $parts);
   }
 
 }
