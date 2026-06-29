@@ -188,7 +188,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         // streaming response object can retry without calling back into chat().
         $messages_no_system = [];
         foreach ($messages as $message) {
-          if (isset($message['role']) && $message['role'] === 'system') {
+          if (isset($message['role']) && in_array($message['role'], ['system', 'developer'], TRUE)) {
             $messages_no_system[] = [
               'role'    => 'user',
               'content' => '[Instructions]: ' . $message['content'],
@@ -242,7 +242,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         if (stripos($top_msg, $needle) !== FALSE || stripos($raw_msg, $needle) !== FALSE) {
           $messages_no_system = [];
           foreach ($messages as $message) {
-            if (isset($message['role']) && $message['role'] === 'system') {
+            if (isset($message['role']) && in_array($message['role'], ['system', 'developer'], TRUE)) {
               $messages_no_system[] = [
                 'role'    => 'user',
                 'content' => '[Instructions]: ' . $message['content'],
@@ -263,6 +263,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
             $result = json_decode($response2->data, TRUE);
             return trim($result['choices'][0]['message']['content'] ?? '');
           }
+          throw new \Exception('HTTP ' . $http_code2 . ': ' . $this->formatErrorBody($response2));
         }
       }
 
