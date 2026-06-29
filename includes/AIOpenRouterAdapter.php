@@ -191,7 +191,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
           if (isset($message['role']) && in_array($message['role'], ['system', 'developer'], TRUE)) {
             $messages_no_system[] = [
               'role'    => 'user',
-              'content' => '[Instructions]: ' . $message['content'],
+              'content' => '[Instructions]: ' . $this->stringifyMessageContent($message['content']),
             ];
           }
           else {
@@ -245,7 +245,7 @@ class AIOpenRouterAdapter extends AIAdapterBase {
             if (isset($message['role']) && in_array($message['role'], ['system', 'developer'], TRUE)) {
               $messages_no_system[] = [
                 'role'    => 'user',
-                'content' => '[Instructions]: ' . $message['content'],
+                'content' => '[Instructions]: ' . $this->stringifyMessageContent($message['content']),
               ];
             }
             else {
@@ -527,6 +527,29 @@ class AIOpenRouterAdapter extends AIAdapterBase {
       watchdog('ai_provider_openrouter', 'chatWithTools error: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
       throw $e;
     }
+  }
+
+  /**
+   * Flatten structured or plain message content to a string.
+   *
+   * Structured content is an array of parts (e.g. [['type'=>'text','text'=>'…']]).
+   * Concatenating such an array directly produces "Array", so extract the text
+   * parts instead.
+   */
+  private function stringifyMessageContent($content): string {
+    if (is_string($content)) {
+      return $content;
+    }
+    if (!is_array($content)) {
+      return (string) $content;
+    }
+    $parts = [];
+    foreach ($content as $part) {
+      if (isset($part['type']) && $part['type'] === 'text' && isset($part['text'])) {
+        $parts[] = $part['text'];
+      }
+    }
+    return implode("\n", $parts);
   }
 
 }
