@@ -543,9 +543,18 @@ class AIOpenRouterAdapter extends AIAdapterBase {
     if (!is_array($content)) {
       return (string) $content;
     }
+    // Single associative part: ['type' => 'text', 'text' => '...'].
+    // Iterating over this would yield scalar values, not sub-parts.
+    if (isset($content['type']) && $content['type'] === 'text' && isset($content['text'])) {
+      return (string) $content['text'];
+    }
+    // Array of parts or plain strings.
     $parts = [];
     foreach ($content as $part) {
-      if (isset($part['type']) && $part['type'] === 'text' && isset($part['text'])) {
+      if (is_string($part)) {
+        $parts[] = $part;
+      }
+      elseif (is_array($part) && isset($part['type']) && $part['type'] === 'text' && isset($part['text'])) {
         $parts[] = $part['text'];
       }
     }
