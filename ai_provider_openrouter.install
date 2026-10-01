@@ -9,28 +9,17 @@ function ai_provider_openrouter_install() {
 }
 
 /**
- * Migrate legacy provider config from openai_openrouter to ai_provider_openrouter.
+ * Copy legacy OpenRouter provider configuration into the AI namespace.
+ *
+ * Non-destructive: legacy config is kept and the legacy module stays enabled
+ * until the operator completes the cutover with AI Upgrade.
  */
 function ai_provider_openrouter_update_1000() {
-  $old_config_name = 'openai_openrouter.settings';
-  $new_config_name = 'ai_provider_openrouter.settings';
-
-  $old = config($old_config_name);
-  $data = $old->get();
-
-  if (!empty($data)) {
-    $new = config($new_config_name);
-    $data['_config_name'] = $new_config_name;
-    $new->setData($data);
-    $new->save();
-    $old->delete();
+  if (!module_load_install('ai_upgrade')) {
+    return t('AI Upgrade helpers unavailable; legacy OpenRouter provider configuration not migrated.');
   }
-
-  if (module_exists('openai_openrouter')) {
-    module_disable(['openai_openrouter']);
-  }
-
-  return t('Migrated legacy openrouter configuration to AI provider openrouter.');
+  $result = ai_upgrade_module_install('ai_provider_openrouter');
+  return t('Copied @count legacy OpenRouter provider config object(s).', ['@count' => $result['migrated']]);
 }
 
 /**
