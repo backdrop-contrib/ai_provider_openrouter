@@ -14,6 +14,12 @@ class AIOpenRouterAdapter extends AIAdapterBase {
 
   use AICompatibleTrait;
 
+  /** @var array|null */
+  protected $models;
+
+  /** @var string|null */
+  protected $modelsConfigKey;
+
   const BASE_URL = 'https://openrouter.ai/api/v1';
 
   /**
@@ -30,6 +36,12 @@ class AIOpenRouterAdapter extends AIAdapterBase {
   /** ------------------------ Models ------------------------ */
 
   public function getModels(): array {
+    $enabled_models = config_get('ai_provider_openrouter.settings', 'enabled_models');
+    $models_config_key = is_array($enabled_models) ? md5(serialize($enabled_models)) : 'all';
+    if ($this->models !== NULL && $this->modelsConfigKey === $models_config_key) {
+      return $this->models;
+    }
+    $this->modelsConfigKey = $models_config_key;
     $models = [];
     try {
       $model_data = $this->fetchModelData();
@@ -64,10 +76,9 @@ class AIOpenRouterAdapter extends AIAdapterBase {
         $models[$id] = $info['name'];
       }
 
-      $enabled_models = config_get('ai_provider_openrouter.settings', 'enabled_models');
       if (isset($enabled_models) && is_array($enabled_models)) {
         if (empty($enabled_models)) {
-          return [];
+          return $this->models = [];
         }
         $filtered = [];
         foreach ($models as $id => $name) {
@@ -75,24 +86,25 @@ class AIOpenRouterAdapter extends AIAdapterBase {
             $filtered[$id] = $name;
           }
         }
-        return $filtered;
+        return $this->models = $filtered;
       }
     }
     catch (\Exception $e) {
       watchdog('ai_provider_openrouter', 'Failed to fetch OpenRouter models: @error', ['@error' => $e->getMessage()], WATCHDOG_ERROR);
     }
-    return $models;
+    return $this->models = $models;
   }
 
   protected function fetchModelData(): array {
-    $cache_key = 'openrouter_model_data';
+    $cache_key = ai_models_cache_key('openrouter', 'model_metadata', [hash('sha256', $this->apiKey)]);
     $cached = cache_get($cache_key);
     if ($cached && !empty($cached->data)) {
       return $cached->data;
     }
 
     try {
-      $data = $this->makeRequest(self::BASE_URL . '/models', [], [], 'GET', 10);
+      // The default catalog includes only text-output models.
+      $data = $this->makeRequest(self::BASE_URL . '/models?output_modalities=all', [], [], 'GET', 10);
       $model_data = $data['data'] ?? [];
       cache_set($cache_key, $model_data, 'cache', time() + 3600);
       return $model_data;
@@ -106,14 +118,50 @@ class AIOpenRouterAdapter extends AIAdapterBase {
   /**
    * {@inheritdoc}
    *
-   * OpenRouter's capability metadata is unreliable — some models misreport
-   * or omit their supported modalities. All models are returned for any
-   * capability. Site admins can override via hook_ai_model_capabilities_alter().
+   * Classify from catalog modalities and supported parameters. Missing metadata
+   * can be corrected through the shared capability override UI.
    */
   public function getModelsByCapability($capability): array {
     $models = $this->getModels();
-    backdrop_alter('ai_model_capabilities', $models, $capability, $this);
-    return $models;
+    $filtered = [];
+    $manual_applied = FALSE;
+
+    if (function_exists('ai_filter_models_by_manual_capability')) {
+      $filtered = ai_filter_models_by_manual_capability($models, 'openrouter', $capability, $manual_applied);
+    }
+
+    if (!$manual_applied) {
+      $filtered = [];
+      $canonical = ai_normalize_capability_name($capability);
+      foreach ($this->fetchModelData() as $model) {
+        $id = $model['id'] ?? '';
+        if (!isset($models[$id])) {
+          continue;
+        }
+        $input = (array) ($model['architecture']['input_modalities'] ?? []);
+        $output = (array) ($model['architecture']['output_modalities'] ?? []);
+        $parameters = (array) ($model['supported_parameters'] ?? []);
+        $chat = in_array('text', $input, TRUE) && in_array('text', $output, TRUE);
+        $matches = [
+          'text' => $chat,
+          'vision' => $chat && in_array('image', $input, TRUE),
+          'audio' => $chat && in_array('audio', $input, TRUE),
+          'image' => in_array('image', $output, TRUE),
+          'embeddings' => in_array('embeddings', $output, TRUE),
+          // Dedicated speech endpoints differ from audio chat modalities.
+          'tts' => in_array('speech', $output, TRUE),
+          'stt' => in_array('transcription', $output, TRUE),
+          'tool_calling' => $chat && in_array('tools', $parameters, TRUE),
+          'thinking' => $chat && (in_array('reasoning', $parameters, TRUE) || in_array('reasoning_effort', $parameters, TRUE)),
+        ];
+        if (!empty($matches[$canonical])) {
+          $filtered[$id] = $models[$id];
+        }
+      }
+    }
+
+    backdrop_alter('ai_model_capabilities', $filtered, $capability, $this);
+    return $filtered;
   }
 
   /** ------------------------ Text / Chat ------------------------ */
@@ -229,6 +277,9 @@ class AIOpenRouterAdapter extends AIAdapterBase {
 
       if ($http_code === 200) {
         $result = json_decode($response->data, TRUE);
+        if (is_array($result)) {
+          $this->captureProviderUsage($result);
+        }
         return trim($result['choices'][0]['message']['content'] ?? '');
       }
 
@@ -261,6 +312,9 @@ class AIOpenRouterAdapter extends AIAdapterBase {
 
           if ($http_code2 === 200) {
             $result = json_decode($response2->data, TRUE);
+            if (is_array($result)) {
+              $this->captureProviderUsage($result);
+            }
             return trim($result['choices'][0]['message']['content'] ?? '');
           }
           throw new \Exception('HTTP ' . $http_code2 . ': ' . $this->formatErrorBody($response2));
@@ -278,14 +332,9 @@ class AIOpenRouterAdapter extends AIAdapterBase {
   /** ------------------------ Image Generation ------------------------ */
 
   protected function mapSizeToAspectRatio(string $size): ?string {
-    switch ($size) {
-      case '1024x1024': return '1:1';
-      case '1792x1024': return '16:9';
-      case '1024x1792': return '9:16';
-      case '1248x832':  return '3:2';
-      case '832x1248':  return '2:3';
-      default:          return NULL;
-    }
+    // Accepts a pixel size or an aspect ratio; returns the closest ratio
+    // OpenRouter's image_config understands.
+    return AIImageHelper::aspectRatio($size);
   }
 
   /**

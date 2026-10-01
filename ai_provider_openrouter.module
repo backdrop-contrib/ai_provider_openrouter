@@ -80,6 +80,14 @@ function ai_provider_openrouter_ai_provider_settings_alter(&$settings, $context)
     '#weight' => -4,
   ];
 
+  $settings['capabilities_link'] = [
+    '#type' => 'markup',
+    '#markup' => '<p>' . t('Models are classified using OpenRouter modalities and supported parameters. <strong><a href="@url">Review or override model capabilities &raquo;</a></strong>', [
+      '@url' => url('admin/config/ai/settings/capabilities/openrouter'),
+    ]) . '</p>' . ai_provider_capability_override_notice('openrouter'),
+    '#weight' => -3,
+  ];
+
   if (isset($context['form'])) {
     $context['form']['#submit'][] = 'ai_provider_openrouter_provider_settings_submit';
   }
