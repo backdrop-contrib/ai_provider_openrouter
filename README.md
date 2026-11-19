@@ -1,10 +1,18 @@
 # AI Provider OpenRouter
 
-OpenRouter provider for hundreds of AI models for the Backdrop CMS AI module.
+Connect Backdrop’s AI features to models from several AI services through one OpenRouter account. Choose which models your site can use for chat, images, embeddings, or audio. Available operations depend on the selected model.
+
+## Requirements
+
+Backdrop CMS 1.x, PHP 8.2 or later, and the AI module, plus the Key module.
 
 ## Installation
 
-- Install this module using the official [Backdrop CMS instructions](https://backdropcms.org/user-guide/modules).
+1. Install and enable this module using the official [Backdrop CMS instructions](https://backdropcms.org/user-guide/modules).
+2. Open **AI settings** at `admin/config/ai/settings` and enable the provider. Select the service credential you saved with the Key module.
+3. Open **OpenRouter models** at `admin/config/ai/openrouter`, select the models you want available, and save.
+
+Read the [module wiki](https://github.com/backdrop-contrib/ai_provider_openrouter/wiki) for setup details, supported operations, and troubleshooting.
 
 ## Issues
 
